@@ -53,7 +53,7 @@ select option{color:#000}
 #lock{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
 #lock .logo{width:72px;height:72px;border-radius:22px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;box-shadow:0 0 40px rgba(139,92,255,.5)}
 #lock .logo svg{width:36px;fill:#04060c}
-#pin{max-width:240px;text-align:center;letter-spacing:.5em;font-size:22px}
+#lockForm{width:min(320px,100%);display:flex;flex-direction:column;gap:10px}
 #lockMsg{color:var(--danger);min-height:20px;margin:0}
 .hide{display:none!important}
 #toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#1b1e2c;border:1px solid var(--border);padding:10px 16px;border-radius:12px;z-index:90;display:none}
@@ -65,10 +65,8 @@ select option{color:#000}
   <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"/></svg></div>
   <h1 data-app-name>DocVault</h1>
   <p class="sub" id="lockHint" data-tagline></p>
-  <input id="pin" type="password" inputmode="numeric" maxlength="6" placeholder="••••" autocomplete="off" aria-label="PIN">
+  <div id="lockForm"></div>
   <p id="lockMsg"></p>
-  <button class="btn primary" id="unlockBtn">Unlock</button>
-  <button class="btn" id="bioBtn" data-module="biometric" hidden>Fingerprint / Face se unlock</button>
 </section>
 
 <main id="app" class="hide">
@@ -108,45 +106,76 @@ const decrypt=(iv,data)=>crypto.subtle.decrypt({name:'AES-GCM',iv},KEY,data);
 
 const toast=m=>{const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2400)};
 
-/* ---------- Lock / Unlock ---------- */
+/* ---------- Login (username + password + privacy question) ---------- */
+const DOM='@docvault.app',norm=s=>s.trim().toLowerCase();
+const b2s=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode(...u.subarray(i,i+32768));return btoa(s)};
+const s2b=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const ahash=async(salt,a)=>b2s(await crypto.subtle.digest('SHA-256',enc.encode(salt+'|'+a)));
+const dclear=()=>tx('docs','readwrite',s=>s.clear());
+let SESS={},tries=0;
+const msg=t=>$('#lockMsg').textContent=t;
+function lockUI(mode){
+  const f=$('#lockForm'),h=$('#lockHint');msg('');
+  if(mode==='login'){h.textContent=CFG.app.tagline;f.innerHTML=`<input id="uName" placeholder="Username" autocapitalize="none" autocomplete="username"><input id="uPass" type="password" placeholder="Password" autocomplete="current-password"><button class="btn primary" id="doLogin">Aage badhein</button><button class="btn" id="toSignup">Naya account banayein</button>`}
+  if(mode==='signup'){h.textContent='Naya account';f.innerHTML=`<input id="uName" placeholder="Username (a-z, 0-9)" autocapitalize="none" autocomplete="username"><input id="uPass" type="password" placeholder="Password (6+ akshar)" autocomplete="new-password"><input id="uQ" list="qs" placeholder="Apna privacy question likhein"><datalist id="qs"><option value="Meri pehli school ka naam?"><option value="Meri maa ki birth city?"><option value="Mere bachpan ke dost ka naam?"></datalist><input id="uAns" placeholder="Uska jawab" autocomplete="off"><button class="btn primary" id="doSignup">Account banayein</button><button class="btn" id="toLogin">Wapas</button>`}
+  if(mode==='answer'){h.textContent='Privacy question';f.innerHTML=`<p style="margin:0;font-size:17px"><b>${esc(SESS.profile.question)}</b></p><input id="uAns" placeholder="Aapka jawab" autocomplete="off"><button class="btn primary" id="doAns">Unlock</button><button class="btn" id="toLogin">Wapas</button>`}
+}
 async function showLock(){
-  KEY=null;vault=false;urls.forEach(u=>URL.revokeObjectURL(u));urls.clear();docs=[];
+  KEY=null;SESS={};vault=false;urls.forEach(u=>URL.revokeObjectURL(u));urls.clear();docs=[];clearTimeout(lockTimer);
   $('#lock').classList.remove('hide');$('#app').classList.add('hide');$('#nav').classList.add('hide');
-  closeSheets();$('#pin').value='';
-  const salt=await mget('salt');
-  $('#lockHint').textContent=salt?CFG.app.tagline:'Naya PIN banayein (4–6 digit)';
-  $('#unlockBtn').textContent=salt?'Unlock':'PIN set karein';
-  $('#bioBtn').hidden=!(salt&&await mget('bio'));
+  closeSheets();lockUI('login');
+  const p=await mget('profile');if(p&&$('#uName'))$('#uName').value=p.username;
 }
-async function submitPin(){
-  const pin=$('#pin').value;$('#lockMsg').textContent='';
-  if(!/^\d{4,6}$/.test(pin)){$('#lockMsg').textContent='PIN 4 se 6 digit ka hona chahiye.';return}
-  let salt=await mget('salt');
-  if(!salt){
-    salt=crypto.getRandomValues(new Uint8Array(16));KEY=await derive(pin,salt);
-    await mset('salt',salt);await mset('check',await encrypt(enc.encode('docvault')));
-    await mset('prefs',prefs);return enter();
+async function doLogin(){
+  const name=norm($('#uName').value),pass=$('#uPass').value;
+  if(!name||!pass)return msg('Username aur password dalein.');
+  msg('Check ho raha hai…');let profile;
+  try{
+    await fbLoad();
+    const c=await FB.Au.signInWithEmailAndPassword(FB.auth,name+DOM,pass),uid=c.user.uid;
+    profile=(await FB.D.get(FB.D.ref(FB.db,`users/${uid}/profile`))).val();
+    if(!profile)return msg('Account setup adhura hai. Naya account banayein.');
+    const loc=await mget('profile');if(!loc||loc.uid!==uid)await dclear();
+    profile.uid=uid;await mset('profile',profile);
+  }catch(e){
+    const loc=await mget('profile'),off=!e.code||e.code==='auth/network-request-failed';
+    if(off&&loc&&loc.username===name)profile=loc;
+    else return msg(/PERMISSION/i.test(e.code||e.message)?'Database rules check karein.':off?'Internet chahiye.':'Username ya password galat.');
   }
-  try{
-    const k=await derive(pin,salt),c=await mget('check');
-    const test=await crypto.subtle.decrypt({name:'AES-GCM',iv:c.iv},k,c.data);
-    if(new TextDecoder().decode(test)!=='docvault')throw 0;
-    KEY=k;enter();
-  }catch{$('#lockMsg').textContent='Galat PIN.';$('#pin').value=''}
+  SESS={pass,profile};tries=0;lockUI('answer');
 }
-async function bioUnlock(){
+async function doSignup(){
+  const name=norm($('#uName').value),pass=$('#uPass').value,q=$('#uQ').value.trim(),a=norm($('#uAns').value);
+  if(!/^[a-z0-9_.]{3,20}$/.test(name))return msg('Username 3–20 akshar: a-z, 0-9, _ .');
+  if(pass.length<6)return msg('Password kam se kam 6 akshar ka ho.');
+  if(q.length<4||!a)return msg('Question aur jawab dono likhein.');
+  msg('Account ban raha hai…');
   try{
-    const b=await mget('bio');
-    await navigator.credentials.get({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)),allowCredentials:[{id:b.id,type:'public-key'}],userVerification:'required',timeout:60000}});
-    KEY=await crypto.subtle.importKey('jwk',b.key,'AES-GCM',true,['encrypt','decrypt']);enter();
-  }catch{$('#lockMsg').textContent='Biometric fail hua. PIN use karein.'}
+    await fbLoad();
+    const c=await FB.Au.createUserWithEmailAndPassword(FB.auth,name+DOM,pass),uid=c.user.uid;
+    const salt=crypto.getRandomValues(new Uint8Array(16)),sb=b2s(salt);
+    KEY=await derive(pass+'\u0000'+a,salt);const ck=await encrypt(enc.encode('docvault'));
+    const profile={username:name,question:q,salt:sb,ansHash:await ahash(sb,a),check:{iv:b2s(ck.iv),data:b2s(ck.data)}};
+    await FB.D.set(FB.D.ref(FB.db,`users/${uid}/profile`),profile);
+    await dclear();await mset('profile',{...profile,uid});enter();
+  }catch(e){KEY=null;msg(e.code==='auth/email-already-in-use'?'Ye username le liya gaya hai.':(!e.code||e.code==='auth/network-request-failed')?'Internet chahiye.':/PERMISSION/i.test(e.code)?'Database rules check karein.':e.code)}
+}
+async function doAns(){
+  const a=norm($('#uAns').value),p=SESS.profile;if(!a)return;
+  if(await ahash(p.salt,a)!==p.ansHash){if(++tries>=5){showLock();return msg('Bahut galat koshish. Dobara login karein.')}return msg(`Galat jawab. ${5-tries} koshish baaki.`)}
+  try{
+    const k=await derive(SESS.pass+'\u0000'+a,s2b(p.salt));
+    await crypto.subtle.decrypt({name:'AES-GCM',iv:s2b(p.check.iv)},k,s2b(p.check.data));
+    KEY=k;SESS={};enter();
+  }catch{showLock();msg('Password galat hai. Dobara login karein.')}
 }
 async function enter(){
   prefs=Object.assign(prefs,await mget('prefs')||{});
   cats=await mget('cats')||[...CFG.categories];
   document.body.classList.toggle('blur',!!prefs.blur);
   $('#lock').classList.add('hide');$('#app').classList.remove('hide');$('#nav').classList.remove('hide');
-  await load();go('home');resetTimer();notifyExpiry();cloudInit();
+  await load();go('home');resetTimer();notifyExpiry();
+  if(FB?.auth.currentUser)cloudSync().catch(()=>{});
 }
 function resetTimer(){clearTimeout(lockTimer);if(KEY)lockTimer=setTimeout(showLock,(prefs.autolock||CFG.settings.autoLockSeconds)*1000)}
 ['pointerdown','keydown','scroll'].forEach(e=>addEventListener(e,resetTimer,{passive:true}));
@@ -208,11 +237,10 @@ function rSettings(){
   <div class="row glass"><span>Auto-lock</span><select id="autolock" style="width:auto">${[30,60,300].map(s=>`<option value="${s}" ${prefs.autolock==s?'selected':''}>${s<60?s+' sec':s/60+' min'}</option>`).join('')}</select></div>
   <div class="row glass" data-module="blur"><span>Thumbnail blur</span><button class="btn" id="blurT">${prefs.blur?'On':'Off'}</button></div>
   <div class="row glass"><span>Background me jate hi lock</span><button class="btn" id="hideT">${prefs.lockOnHide?'On':'Off'}</button></div>
-  <div class="row glass" data-module="biometric"><span>Fingerprint / Face</span><button class="btn" id="bioT">Enable</button></div>
   <div class="row glass" data-module="expiry"><span>Expiry notifications</span><button class="btn" id="notifT">Allow</button></div>
-  ${CFG.firebase?.enabled?'<div class="row glass"><span>Cloud sync</span><button class="btn" id="cloudT">Open</button></div>':''}
+  <div class="row glass"><span>Cloud sync</span><button class="btn" id="cloudT">Abhi sync</button></div>
   <div class="row glass" data-module="hiddenVault"><span>Hidden Vault</span><button class="btn" id="vaultT">Kholein</button></div>
-  <button class="btn danger" id="lockNow" style="width:100%">Abhi lock karein</button>`;
+  <div style="display:flex;gap:10px"><button class="btn" id="lockNow" style="flex:1">Lock karein</button><button class="btn danger" id="logoutT" style="flex:1">Logout</button></div>`;
   Object.entries(CFG.modules).forEach(([k,on])=>{if(!on)$$(`#v-settings [data-module="${k}"]`).forEach(e=>e.remove())});
 }
 
@@ -233,12 +261,6 @@ function openSheet(d){
   $('#cancel').onclick=closeSheets;
   $('#save').onclick=()=>saveDoc(d);
 }
-async function compress(file){
-  if(!file.type.startsWith('image/'))return file;
-  const bmp=await createImageBitmap(file),s=Math.min(1,CFG.settings.imageMaxPx/Math.max(bmp.width,bmp.height));
-  const c=document.createElement('canvas');c.width=bmp.width*s;c.height=bmp.height*s;c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
-  return new Promise(r=>c.toBlob(r,'image/jpeg',CFG.settings.imageQuality));
-}
 async function saveDoc(old){
   const f=$('#file').files[0],name=$('#dName').value.trim();
   if(!old&&!f)return toast('Pehle file chunein.');
@@ -247,11 +269,11 @@ async function saveDoc(old){
   const d=old?{...old}:{id:crypto.randomUUID(),created:Date.now()};
   Object.assign(d,{name,cat:$('#dCat').value,tags:$('#dTags').value.trim(),expiry:$('#dExp')?.value||'',hidden:!!$('#dHid')?.checked,updated:Date.now()});
   if(f){
-    const blob=await compress(f),e=await encrypt(await blob.arrayBuffer());
-    Object.assign(d,{mime:blob.type||f.type,iv:e.iv,data:e.data});
+    const e=await encrypt(await f.arrayBuffer());
+    Object.assign(d,{mime:f.type||'application/octet-stream',iv:e.iv,data:e.data});
     if(urls.has(d.id)){URL.revokeObjectURL(urls.get(d.id));urls.delete(d.id)}
   }
-  await dput(d);await load();closeSheets();toast('Saved');cloudPush(d);go(view==='add'?'home':view);
+  await dput(d);await load();closeSheets();toast('Saved — upload ho raha hai…');cloudPush(d);go(view==='add'?'home':view);
 }
 
 /* ---------- Viewer ---------- */
@@ -268,18 +290,8 @@ async function openDoc(id){
   $('#vDel').onclick=async()=>{if(!confirm('Yeh document delete karein?'))return;await ddel(d.id);cloudDel(d.id);if(urls.has(d.id)){URL.revokeObjectURL(urls.get(d.id));urls.delete(d.id)}await load();done();go(view)};
 }
 
-/* ---------- Biometric (WebAuthn) ---------- */
-async function enableBio(){
-  try{
-    const cred=await navigator.credentials.create({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)),rp:{name:'DocVault'},user:{id:crypto.getRandomValues(new Uint8Array(16)),name:'docvault',displayName:'DocVault'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
-    await mset('bio',{id:cred.rawId,key:await crypto.subtle.exportKey('jwk',KEY)});toast('Biometric on ho gaya');
-  }catch{toast('Is device par biometric available nahi.')}
-}
-
-/* ---------- Cloud sync (Firebase Realtime DB, sirf encrypted data) ---------- */
+/* ---------- Cloud sync (Firebase Realtime DB, original quality, encrypted) ---------- */
 let FB=null;
-const b2s=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode(...u.subarray(i,i+32768));return btoa(s)};
-const s2b=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 async function fbLoad(){
   if(FB)return FB;
   const base='https://www.gstatic.com/firebasejs/10.14.1/';
@@ -287,78 +299,45 @@ async function fbLoad(){
   const app=A.initializeApp(CFG.firebase.config);
   return FB={Au,D,auth:Au.getAuth(app),db:D.getDatabase(app)};
 }
-async function cloudInit(){
-  if(!CFG.firebase?.enabled)return;
-  try{
-    await fbLoad();
-    const u=await new Promise(r=>{const off=FB.Au.onAuthStateChanged(FB.auth,x=>{off();r(x)})});
-    if(u)await cloudSync();
-  }catch{}
-}
+const CH=3000000;
+const uref=p=>FB.D.ref(FB.db,`users/${FB.auth.currentUser.uid}/${p}`);
 async function cloudPush(d){
   try{
     if(!FB?.auth.currentUser)return;
-    await FB.D.set(FB.D.ref(FB.db,`users/${FB.auth.currentUser.uid}/docs/${d.id}`),{id:d.id,name:d.name,cat:d.cat,tags:d.tags||'',expiry:d.expiry||'',hidden:!!d.hidden,created:d.created,updated:d.updated||d.created,mime:d.mime,iv:b2s(d.iv),data:b2s(d.data)});
-  }catch{toast('Cloud upload fail hua')}
+    const s=b2s(d.data),n=Math.ceil(s.length/CH);
+    await FB.D.remove(uref('files/'+d.id));
+    for(let i=0;i<n;i++)await FB.D.set(uref(`files/${d.id}/${i}`),s.slice(i*CH,(i+1)*CH));
+    await FB.D.set(uref('docs/'+d.id),{id:d.id,name:d.name,cat:d.cat,tags:d.tags||'',expiry:d.expiry||'',hidden:!!d.hidden,created:d.created,updated:d.updated||d.created,mime:d.mime,iv:b2s(d.iv),n});
+    toast('Upload ho gaya: '+d.name);
+  }catch{toast('Cloud upload fail. Internet ya rules check karein')}
 }
 async function cloudDel(id){
-  try{if(FB?.auth.currentUser)await FB.D.set(FB.D.ref(FB.db,`users/${FB.auth.currentUser.uid}/docs/${id}`),{deleted:true,updated:Date.now()})}catch{}
+  try{if(FB?.auth.currentUser){await FB.D.remove(uref('files/'+id));await FB.D.set(uref('docs/'+id),{deleted:true,updated:Date.now()})}}catch{}
 }
 async function cloudSync(){
-  const {D,db,auth}=FB,root=D.ref(db,'users/'+auth.currentUser.uid),metaRef=D.child(root,'meta');
-  const m=await D.get(metaRef),salt=await mget('salt');
-  if(m.exists()){
-    const cm=m.val();
-    if(cm.salt!==b2s(salt)){
-      const pin=prompt('Is account ke vault ka PIN dalein');if(!pin)return toast('Sync cancel');
-      const cs=s2b(cm.salt),civ=s2b(cm.check.iv),cd=s2b(cm.check.data);let nk;
-      try{nk=await derive(pin,cs);await crypto.subtle.decrypt({name:'AES-GCM',iv:civ},nk,cd)}catch{return toast('Galat PIN, sync nahi hua')}
-      for(const d of docs){const plain=await decrypt(d.iv,d.data),iv=crypto.getRandomValues(new Uint8Array(12));d.iv=iv;d.data=await crypto.subtle.encrypt({name:'AES-GCM',iv},nk,plain);d.updated=Date.now();await dput(d)}
-      KEY=nk;await mset('salt',cs);await mset('check',{iv:civ,data:cd.buffer});await mset('bio',null);
-      urls.forEach(u=>URL.revokeObjectURL(u));urls.clear();
-    }
-  }else{
-    const c=await mget('check');
-    await D.set(metaRef,{salt:b2s(salt),check:{iv:b2s(c.iv),data:b2s(c.data)}});
-  }
-  const remote=(await D.get(D.child(root,'docs'))).val()||{};
+  if(!FB?.auth.currentUser)return toast('Online login chahiye');
+  toast('Sync ho raha hai…');
+  const remote=(await FB.D.get(uref('docs'))).val()||{};
   for(const [id,r] of Object.entries(remote)){
     const l=docs.find(x=>x.id===id);
     if(l&&(l.updated||l.created)>=r.updated)continue;
     if(r.deleted){if(l)await ddel(id);continue}
-    await dput({...r,iv:s2b(r.iv),data:s2b(r.data).buffer});
+    let s='';for(let i=0;i<r.n;i++)s+=(await FB.D.get(uref(`files/${id}/${i}`))).val()||'';
+    await dput({...r,iv:s2b(r.iv),data:s2b(s).buffer});
   }
   await load();
   for(const d of docs){const r=remote[d.id];if(!r||r.updated<(d.updated||d.created))await cloudPush(d)}
   go(view);toast('Sync ho gaya');
 }
-async function openCloud(){
-  try{await fbLoad()}catch{return toast('Internet chahiye')}
-  const u=FB.auth.currentUser;
-  $('#sheet').innerHTML=u?`<h1>Cloud sync</h1><p class="sub">${esc(u.email)}</p>
-  <div style="display:flex;gap:10px"><button class="btn" id="cOut">Logout</button><button class="btn primary" id="cSync" style="flex:1">Abhi sync karein</button></div>
-  <button class="btn" id="cClose" style="width:100%;margin-top:10px">Close</button>`
-  :`<h1>Cloud sync</h1><p class="sub">Login karein, documents (encrypted) har device par milenge.</p>
-  <label>Email</label><input id="cMail" type="email" autocomplete="email"><label>Password (6+ akshar)</label><input id="cPass" type="password" autocomplete="current-password">
-  <div style="display:flex;gap:10px;margin-top:14px"><button class="btn" id="cUp">Sign up</button><button class="btn primary" id="cIn" style="flex:1">Login</button></div>
-  <button class="btn" id="cClose" style="width:100%;margin-top:10px">Close</button>`;
-  $('#sheetWrap').classList.add('open');
-  $('#cClose').onclick=closeSheets;
-  const auth=async fn=>{try{await fn(FB.auth,$('#cMail').value.trim(),$('#cPass').value);closeSheets();await cloudSync()}catch(e){toast((e.code||'Error').replace('auth/',''))}};
-  if(u){
-    $('#cOut').onclick=async()=>{await FB.Au.signOut(FB.auth);closeSheets();toast('Logout ho gaya')};
-    $('#cSync').onclick=async()=>{closeSheets();try{await cloudSync()}catch{toast('Sync fail')}};
-  }else{
-    $('#cIn').onclick=()=>auth(FB.Au.signInWithEmailAndPassword);
-    $('#cUp').onclick=()=>auth(FB.Au.createUserWithEmailAndPassword);
-  }
-}
 
 /* ---------- Events ---------- */
 document.addEventListener('click',async e=>{
   const t=e.target;let el;
-  if(t.closest('#unlockBtn'))return submitPin();
-  if(t.closest('#bioBtn'))return bioUnlock();
+  if(t.closest('#doLogin'))return doLogin();
+  if(t.closest('#toSignup'))return lockUI('signup');
+  if(t.closest('#doSignup'))return doSignup();
+  if(t.closest('#toLogin'))return showLock();
+  if(t.closest('#doAns'))return doAns();
   if(el=t.closest('[data-nav]')){return el.dataset.nav==='add'?openSheet():(filterCat=null,go(el.dataset.nav))}
   if(el=t.closest('.card'))return openDoc(el.dataset.id);
   if(el=t.closest('[data-f]')){filterCat=el.dataset.f||null;return rHome()}
@@ -366,13 +345,15 @@ document.addEventListener('click',async e=>{
   if(t.closest('#addCat')){const v=$('#newCat').value.trim();if(v&&!cats.includes(v)){cats.push(v);await mset('cats',cats);rCats()}return}
   if(t.closest('#blurT')){prefs.blur=!prefs.blur;document.body.classList.toggle('blur',prefs.blur);await mset('prefs',prefs);return rSettings()}
   if(t.closest('#hideT')){prefs.lockOnHide=!prefs.lockOnHide;await mset('prefs',prefs);return rSettings()}
-  if(t.closest('#bioT'))return enableBio();
-  if(t.closest('#cloudT'))return openCloud();
   if(t.closest('#notifT')){const p=await Notification.requestPermission();return toast(p==='granted'?'Alerts on':'Permission nahi mili')}
+  if(t.closest('#cloudT')){try{await cloudSync()}catch{toast('Sync fail. Internet check karein')}return}
   if(t.closest('#lockNow'))return showLock();
+  if(t.closest('#logoutT')){try{await FB?.Au.signOut(FB.auth)}catch{}return showLock()}
   if(t.closest('#vaultT')){
-    const pin=prompt('Hidden Vault ke liye PIN dalein');if(!pin)return;
-    try{const k=await derive(pin,await mget('salt')),c=await mget('check');await crypto.subtle.decrypt({name:'AES-GCM',iv:c.iv},k,c.data);vault=true;filterCat=null;go('home');toast('Hidden Vault khula')}catch{toast('Galat PIN')}
+    const a=prompt('Hidden Vault ke liye apne privacy question ka jawab dalein');if(!a)return;
+    const p=await mget('profile');
+    if(await ahash(p.salt,norm(a))===p.ansHash){vault=true;filterCat=null;go('home');toast('Hidden Vault khula')}else toast('Galat jawab');
+    return;
   }
   if(t.classList.contains('overlay'))closeSheets();
 });
@@ -380,7 +361,7 @@ document.addEventListener('input',async e=>{
   if(e.target.id==='q')rSearch();
   if(e.target.id==='autolock'){prefs.autolock=+e.target.value;await mset('prefs',prefs);resetTimer()}
 });
-$('#pin').addEventListener('keydown',e=>{if(e.key==='Enter')submitPin()});
+$('#lock').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lockForm .primary')?.click()});
 
 /* ---------- Boot (bridge.js isse call karta hai) ---------- */
 window.DV={start:async cfg=>{

@@ -51,15 +51,12 @@
   "settings": {
     "autoLockSeconds": 60,
     "expiryAlertDays": 30,
-    "imageMaxPx": 1280,
-    "imageQuality": 0.7,
-    "maxFileMB": 5
+    "maxFileMB": 25
   },
   "modules": {
     "search": true,
     "expiry": true,
     "hiddenVault": true,
-    "biometric": true,
     "blur": true
   },
   "firebase": {
