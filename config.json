@@ -1,0 +1,77 @@
+{
+  "app": {
+    "name": "DocVault",
+    "tagline": "Aapke documents, aapke phone me \u2014 locked."
+  },
+  "theme": {
+    "bg": "#07080d",
+    "surface": "rgba(255,255,255,0.06)",
+    "border": "rgba(255,255,255,0.12)",
+    "text": "#eef1f8",
+    "muted": "#8d94a8",
+    "accent": "#38e1ff",
+    "accent2": "#8b5cff",
+    "danger": "#ff5c7a",
+    "warn": "#ffb84d"
+  },
+  "categories": [
+    "IDs",
+    "Travel",
+    "Medical",
+    "Education",
+    "Bills"
+  ],
+  "nav": [
+    {
+      "id": "home",
+      "label": "Home",
+      "icon": "M3 11l9-8 9 8v10h-6v-6H9v6H3z"
+    },
+    {
+      "id": "search",
+      "label": "Search",
+      "icon": "M10 2a8 8 0 105 14l5 5 2-2-5-5A8 8 0 0010 2z"
+    },
+    {
+      "id": "add",
+      "label": "Add",
+      "icon": "M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"
+    },
+    {
+      "id": "cats",
+      "label": "Categories",
+      "icon": "M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z"
+    },
+    {
+      "id": "settings",
+      "label": "Security",
+      "icon": "M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"
+    }
+  ],
+  "settings": {
+    "autoLockSeconds": 60,
+    "expiryAlertDays": 30,
+    "imageMaxPx": 1280,
+    "imageQuality": 0.7,
+    "maxFileMB": 5
+  },
+  "modules": {
+    "search": true,
+    "expiry": true,
+    "hiddenVault": true,
+    "biometric": true,
+    "blur": true
+  },
+  "firebase": {
+    "enabled": true,
+    "config": {
+      "apiKey": "AIzaSyBx3iF8TyTLju33avHN9Ql3uIsaxPaXtms",
+      "authDomain": "storage1-6d590.firebaseapp.com",
+      "databaseURL": "https://storage1-6d590-default-rtdb.firebaseio.com",
+      "projectId": "storage1-6d590",
+      "storageBucket": "storage1-6d590.firebasestorage.app",
+      "messagingSenderId": "386125732256",
+      "appId": "1:386125732256:web:673ae27c811974b84e6cc5"
+    }
+  }
+}
